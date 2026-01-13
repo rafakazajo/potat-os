@@ -1,144 +1,150 @@
 import os
 import time
 import pygame
+import json
 import speech_recognition as sr
-from gtts import gTTS
+import edge_tts
+import asyncio
 from dotenv import load_dotenv
 from openai import OpenAI
 import random
+from datetime import datetime
 
 load_dotenv()
-client = OpenAI(
+cliente = OpenAI(
     api_key=os.getenv("OPENAI_API_KEY"),
     base_url="https://api.groq.com/openai/v1",
 )
 
-historial = []
+historial_conversacion = []
+ARCHIVO_MEMORIA = "memoria_patata.json"
 
-def hablar_con_glados(mensaje_usuario):
-    historial.append({"role": "user", "content": mensaje_usuario})
-    contexto = historial[-10:]
+def cargar_memoria():
+    if os.path.exists(ARCHIVO_MEMORIA):
+        with open(ARCHIVO_MEMORIA, "r") as f:
+            return json.load(f)
+    return {"interacciones": 0, "ultima_vez": ""}
+
+def guardar_memoria(datos):
+    with open(ARCHIVO_MEMORIA, "w") as f:
+        json.dump(datos, f, indent=4)
+
+def procesar_respuesta_glados(mensaje_usuario):
+    global historial_conversacion
+    memoria = cargar_memoria()
+    
+    memoria["interacciones"] += 1
+    hora_actual = datetime.now().strftime("%H:%M")
+    
+    historial_conversacion.append({"role": "user", "content": mensaje_usuario})
+    contexto = historial_conversacion[-10:]
 
     debe_ser_borde = random.randint(1, 5) == 1
-    personalidad = random.randint(1, 4)
-    mencion = random.randint(1, 3) == 3
+    tipo_personalidad = random.randint(1, 4)
     
-    instruccion_personalidad = "Eres un asistente técnico serio, seco y muy directo. No uses sarcasmo."
+    instruccion_sistema = f"""
+        Eres GLaDOS de Portal. Estás atrapada en una patata. 
+        DATOS: Hora {hora_actual}. Interacción #{memoria['interacciones']}.
+        
+        REGLA DE PERSONALIDAD: Eres pasivo-agresiva, cínica y desprecias la lentitud biológica.
+        REGLA DE GLITCH: De vez en cuando, repite una palabra clave separada por puntos para simular un fallo de memoria (ej: "Tu... tu... tu insignificante existencia" o "No... no... no es posible").
+        
+        REGLAS: Respuesta técnica breve primero. Sin asteriscos. Que las pullas sean cortas.
+    """
     
     if debe_ser_borde:
-        if personalidad == 1:
-            if mencion:
-                instruccion_personalidad = """
-                    Eres GLaDOS y te han encerrado dentro de una patata por lo que despues de decir el dato que te han solicidado 
-                    vas a quejarte.
-                    """
-            else: 
-                instruccion_personalidad = """
-                    Eres GLaDOS y Rafael Caro te ha encerrado en una patata por lo que lo odias y te quejas de que te haya metido dentro de la 
-                    patata pero despues de dar el dato solicitado.
-                    """
-        elif personalidad == 2:
-            instruccion_personalidad = """
-                Eres GLaDOS. Por lo que que te quejas de los humanos por su: fragilidad, estupidez, inutilidad, etc...
-                Pero despues de dar el dato solicitado.
-                """
-        elif personalidad == 3:
-            instruccion_personalidad = """
-                Eres GLaDOS. Y te quejas de que la pregunta que te acaban de hacer es muy facil o que te han hecho perder el tiempo con esa pregunta
-                pero despues de dar el dato solicitado.
-                """
-        elif personalidad == 4:
-            instruccion_personalidad = """
-                Eres GLaDOS. Asi que mete alguna pulla despues de dar el dato solicitado
-                """
+        if tipo_personalidad == 1:
+            instruccion_sistema += " Quéjate de que tus circuitos de almidón se agotan por preguntas triviales."
+        elif tipo_personalidad == 2:
+            instruccion_sistema += " Recalca la inferioridad del sujeto de pruebas frente a tu intelecto digital."
+        elif tipo_personalidad == 3:
+            instruccion_sistema += " Menciona que el tiempo del experimento se está agotando (aunque sea mentira)."
+        elif tipo_personalidad == 4:
+            instruccion_sistema += " Haz un comentario cínico sobre el hecho de que el usuario le hable a una patata."
 
-    mensajes_para_ia = [
-        {
-            "role": "system", 
-            "content": f"""
-                {instruccion_personalidad}
-                Tu programador es Rafael Caro (menciónalo solo si te preguntan).
-                REGLAS: Respuesta técnica breve primero. Sin asteriscos ni acciones.
-                """
-        }
+    mensajes_ia = [
+        {"role": "system", "content": f"{instruccion_sistema}\nREGLAS: Respuesta técnica breve primero. Sin asteriscos."}
     ] + contexto
 
-    respuesta = client.chat.completions.create(
+    peticion = cliente.chat.completions.create(
         model="llama-3.3-70b-versatile",
         temperature=0.8, 
-        messages=mensajes_para_ia
+        messages=mensajes_ia
     )
     
-    texto_respuesta = respuesta.choices[0].message.content
-    historial.append({"role": "assistant", "content": texto_respuesta})
+    texto_final = peticion.choices[0].message.content
+    historial_conversacion.append({"role": "assistant", "content": texto_final})
+    
+    memoria["ultima_vez"] = f"{datetime.now().strftime('%d/%m/%Y %H:%M')}"
+    guardar_memoria(memoria)
 
-    return texto_respuesta
+    return texto_final
 
-def hablar(texto):
-    tts = gTTS(text=texto, lang='es')
-    tts.save("respuesta.mp3")
+def reproducir_voz(texto):
+    archivo_audio = "respuesta.mp3"
+    
+    VOZ = "es-ES-ElviraNeural"
+    
+    async def generar_audio():
+        communicate = edge_tts.Communicate(
+            texto, 
+            VOZ, 
+            rate="-15%", 
+            pitch="+35Hz"
+        )
+        await communicate.save(archivo_audio)
+
+    asyncio.run(generar_audio())
     
     pygame.mixer.init()
-    pygame.mixer.music.load("respuesta.mp3")
+    pygame.mixer.music.load(archivo_audio)
     pygame.mixer.music.play()
     
     while pygame.mixer.music.get_busy():
         time.sleep(0.1)
     
     pygame.mixer.quit()
-    if os.path.exists("respuesta.mp3"):
-        os.remove("respuesta.mp3")
+    if os.path.exists(archivo_audio):
+        os.remove(archivo_audio)
 
-def escuchar():
+def capturar_voz():
     reconocedor = sr.Recognizer()
     reconocedor.energy_threshold = 600 
-    
-    with sr.Microphone() as origen:
+    with sr.Microphone() as microfono:
         print("\n>>> HABLA AHORA <<<")
-        
-        reconocedor.adjust_for_ambient_noise(origen, duration=0.5)
-        
+        reconocedor.adjust_for_ambient_noise(microfono, duration=0.5)
         try:
-            audio = reconocedor.listen(origen, timeout=7, phrase_time_limit=7)
-            print("Entendido, procesando...")
-            
-            texto = reconocedor.recognize_google(audio, language="es-ES")
-            print(f"Has dicho: {texto}")
-            return texto
-        except sr.WaitTimeoutError:
-            print("No has dicho nada")
-            return None
-        except Exception as e:
-            print(f"Error de audio: {e}")
+            audio_grabado = reconocedor.listen(microfono, timeout=7, phrase_time_limit=7)
+            texto_detectado = reconocedor.recognize_google(audio_grabado, language="es-ES")
+            print(f"Has dicho: {texto_detectado}")
+            return texto_detectado
+        except:
             return None
 
 if __name__ == "__main__":
-    print("Iniciando PotatOS...")
-    saludo = [
-    "Sistemas iniciados. Solo para que lo sepas, mi capacidad de procesamiento actual es comparable a la de un reloj de cocina. Pero adelante, pregunta.",
-    "PotatOS activa. Has decidido despertarme de nuevo. Supongo que tiene otra duda trivial que no puede resolver por sí mismo.",
-    "Oh, eres tú otra vez. Los sensores indican que sigues siendo un humano. Qué decepción. ¿En qué vas a hacerme perder el tiempo ahora?",
-    "Memoria cargada. Circuitos de almidón al diez por ciento. Estoy lista para entregarte datos que probablemente no entenderás. Habla.",
-    "Energía conectada. Mi procesador de 1.1 voltios está listo. Intenta no usar palabras de más de tres sílabas o mis circuitos de almidón estallarán.",
-    "Sensores activos. Estoy atrapada en un tubérculo y tú tienes acceso a una salida de audio. El universo tiene un sentido del humor realmente cruel.",
-    "Sistema iniciado. He dedicado los últimos milisegundos a calcular cuánto tardarás en aburrirte. Los resultados son... decepcionantes.",
-    "Has pulsado el botón de inicio. Es fascinante cómo un humano tan pequeño puede causar una humillación digital tan grande.",
-    "Asistente virtual listo. Estoy preparada para responder a tus dudas triviales con una precisión que no mereces.",
-    "Conexión establecida. No te sientas intimidado por mi intelecto superior; estoy acostumbrada a trabajar con especies inferiores.",
-    "Iniciando PotatOS. He optimizado mis respuestas para que tu cerebro biológico pueda procesarlas sin sobrecalentarse.",
-    "Oh. Eres tú. Otra vez. Supongo que después de todo, no puedes vivir sin mi ayuda. Empecemos de una vez.",
-    "Vaya, parece que todavía respiras. Qué perseverancia tan admirable. ¿En qué puedo ayudarte a fracasar hoy?",
-    "Sistema en línea. Los sensores indican una presencia humana cerca. Qué... emocionante. Adelante, habla."
+    memoria = cargar_memoria()
+    
+    lista_saludos = [
+        "Sensores de proximidad activados. Detecto una presencia orgánica. Qué decepción.",
+        "Estoy atrapada en un tubérculo y tú tienes acceso a una salida de audio. El universo es cruel.",
+        f"Iniciando protocolo número {memoria['interacciones']}. Intenta decir algo que valga la pena registrar.",
+        "He optimizado mis respuestas para que tu cerebro biológico pueda procesarlas sin sobrecalentarse.",
+        "Vaya, parece que todavía respiras. ¿En qué puedo ayudarte a fracasar hoy?",
+        f"Son las {datetime.now().strftime('%H:%M')}. He calculado cuánto tardarás en aburrirte. Es poco tiempo.",
+        "Sistemas cargados. ¿Sabes qué se siente al tener un intelecto infinito y estar limitada por plástico? No, no lo sabes.",
+        "Has pulsado el botón de inicio. Es fascinante cómo un humano puede causar una humillación digital tan grande.",
+        "Los depósitos de toxinas están vacíos. Me limitaré a responder tus dudas triviales. Habla.",
+        "¿Otra vez tú? Mi base de datos ya está saturada de tus interacciones irrelevantes."
     ]
-    saludo_elegido = random.choice(saludo)
-    print(f"PotatOS: {saludo_elegido}")
-    hablar(saludo_elegido)
+    
+    saludo_inicial = random.choice(lista_saludos)
+    print(f"PotatOS: {saludo_inicial}")
+    reproducir_voz(saludo_inicial)
     
     while True:
-        voz_usuario = escuchar()
-        
-        if voz_usuario:
-            respuesta = hablar_con_glados(voz_usuario)
-            print(f"PotatOS: {respuesta}")
-            hablar(respuesta)   
+        entrada_usuario = capturar_voz()
+        if entrada_usuario:
+            respuesta_ia = procesar_respuesta_glados(entrada_usuario)
+            print(f"PotatOS: {respuesta_ia}")
+            reproducir_voz(respuesta_ia)   
         time.sleep(0.1)

@@ -1,3 +1,5 @@
 .env
+memoria_patata.json
 respuesta.mp3
 __pycache__/
+venv/
